@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ExpressDB — DB bus times, instantly</title>
+<meta name="description" content="Next C4 and DB03R departures for Discovery Bay. Tap the icon, see your bus. No menus.">
+<meta name="theme-color" content="#0A111E">
+<link rel="apple-touch-icon" href="./icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ExpressDB">
+<style>
+/* =====================================================================
+   ExpressDB — design tokens
+   Night-harbour navy + DBTSL bus gold + traffic-signal urgency colors.
+   Digits set in the platform mono face (SF Mono on iOS) with tabular
+   numerals: the departure board IS the display typography.
+   ===================================================================== */
+:root {
+  --bg:        #0A111E;
+  --surface:   #111B2E;
+  --raised:    #16233B;
+  --line:      #223252;
+  --ink:       #EFF3FA;
+  --muted:     #8CA0BF;
+  --faint:     #5A6C88;
+  --gold:      #E9B44C;
+  --gold-dim:  #9A7A3A;
+  --red:       #FF5D5D;
+  --amber:     #FFB020;
+  --green:     #3DD68C;
+  --radius:    16px;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html { height: 100%; }
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  padding: calc(env(safe-area-inset-top) + 14px) 16px calc(env(safe-area-inset-bottom) + 24px);
+  max-width: 560px;
+  margin: 0 auto;
+  overscroll-behavior-y: none;
+}
+
+/* ---------- header ---------- */
+header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 2px 2px 14px;
+}
+.wordmark {
+  font-weight: 800; font-style: italic; letter-spacing: -0.03em;
+  font-size: 22px; user-select: none;
+}
+.wordmark .db { color: var(--gold); font-style: normal; margin-left: 1px; }
+.meta { text-align: right; }
+.daychip {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.08em; color: var(--gold);
+  border: 1px solid var(--gold-dim); border-radius: 999px;
+  padding: 3px 9px; margin-bottom: 3px;
+}
+.clock {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 12px; color: var(--muted);
+}
+
+/* ---------- route cards ---------- */
+main { display: flex; flex-direction: column; gap: 10px; }
+.card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px 13px 20px;
+  overflow: hidden;
+  cursor: pointer;
+}
+/* signature: the platform-edge signal bar */
+.card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
+  background: var(--edge, var(--faint));
+}
+.card.urgent::before { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .card.urgent::before { animation: none; } }
+
+.card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.route-name { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
+.route-sub  { font-size: 11px; color: var(--faint); font-weight: 600;
+              letter-spacing: 0.06em; text-transform: uppercase; }
+.pin { color: var(--gold); font-size: 12px; margin-left: 4px; }
+
+.board { display: flex; align-items: baseline; gap: 12px; margin-top: 8px; }
+.dep-time {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 40px; font-weight: 700; line-height: 1;
+}
+.countdown {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 18px; font-weight: 600; color: var(--muted);
+}
+.countdown.hot { color: var(--edge-text, var(--ink)); }
+
+.then {
+  margin-top: 8px; font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 13px; color: var(--faint);
+}
+.then b { color: var(--muted); font-weight: 600; }
+
+.done-note { font-size: 14px; color: var(--muted); margin-top: 6px; }
+.tomorrow  { color: var(--faint); }
+
+/* expanded rest-of-day list */
+.rest { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px;
+        display: none; }
+.card.open .rest { display: block; }
+.rest-title { font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+              color: var(--faint); text-transform: uppercase; margin-bottom: 6px; }
+.rest-times {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 13px; line-height: 1.9; color: var(--muted);
+  display: flex; flex-wrap: wrap; gap: 0 14px;
+}
+
+/* ---------- footer / settings ---------- */
+footer {
+  margin-top: 18px; display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--faint); padding: 0 2px;
+}
+footer button {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 600;
+  font-family: var(--sans); cursor: pointer;
+}
+footer button:focus-visible, .card:focus-visible {
+  outline: 2px solid var(--gold); outline-offset: 2px;
+}
+
+/* settings sheet */
+dialog {
+  background: var(--raised); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 20px;
+  padding: 20px; width: min(92vw, 420px); margin: auto;
+}
+dialog::backdrop { background: rgba(4, 8, 16, 0.7); }
+dialog h2 { font-size: 16px; margin-bottom: 4px; }
+dialog .hint { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px;
+}
+.setting-row:last-of-type { border-bottom: none; }
+.setting-row .controls { display: flex; gap: 8px; }
+.setting-row button {
+  background: var(--surface); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+  font-family: var(--sans);
+}
+.setting-row button.active { color: var(--gold); border-color: var(--gold-dim); }
+.ph-status { font-size: 11px; color: var(--faint); margin-top: 12px; line-height: 1.6; }
+.close-btn {
+  margin-top: 14px; width: 100%; background: var(--gold); color: #171203;
+  border: none; border-radius: 10px; padding: 11px; font-size: 14px;
+  font-weight: 700; cursor: pointer; font-family: var(--sans);
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wordmark">EXPRESS<span class="db">DB</span></div>
+  <div class="meta">
+    <div class="daychip" id="daychip">—</div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<main id="cards" aria-live="polite"></main>
+
+<footer>
+  <span id="footnote">Timetables: DBTSL · Holidays: HK Gov</span>
+  <button id="settingsBtn" aria-haspopup="dialog">Settings</button>
+</footer>
+
+<dialog id="settingsDlg">
+  <h2>Routes</h2>
+  <p class="hint">Pin the routes you take; hide the ones you don't.</p>
+  <div id="settingRows"></div>
+  <p class="ph-status" id="phStatus"></p>
+  <p class="ph-status">ExpressDB v1.0 · Two C4 (DBN → CL) cells are pending
+    verification against the printed timetable: Sat 06:xx and Sun/PH 08:xx.</p>
+  <button class="close-btn" id="closeSettings">Done</button>
+</dialog>
+
+<script>
+"use strict";
+/* =====================================================================
+   ExpressDB v1.0
+   Data + day-type + marker logic ported unchanged from the verified
+   Scriptable widget (v6). Do not edit times here without checking the
+   printed DBTSL timetable.
+   ===================================================================== */
+
+// ---------- data helper ----------
+function pattern(hour, minutes) {
+  const h = String(hour).padStart(2, "0");
+  return minutes.map(m => ({ time: `${h}:${String(m).padStart(2, "0")}`, marker: null }));
+}
+
+// ---------- timetables (source of truth: Scriptable v6, user-verified) ----------
+const TIMETABLES = {
+
+  "03R-toSB": {
+    label: "DB → SB", sub: "DB03R · DB Plaza → Sunny Bay Stn",
+    weekday: [
+      { time: "00:00", marker: "*" }, { time: "00:05", marker: "^" }, { time: "00:20", marker: null },
+      ...pattern(6,[15,30,43,55]), ...pattern(7,[5,15,25,35,45,55]),
+      ...pattern(8,[5,15,20,30,40,50]), ...pattern(9,[0,10,25,40,55]),
+      ...pattern(10,[10,25,40]), ...pattern(11,[0,20,40]), ...pattern(12,[0,20,40]),
+      ...pattern(13,[0,20,40]), ...pattern(14,[0,20,40]), ...pattern(15,[0,20,40]),
+      ...pattern(16,[0,20,40]), ...pattern(17,[0,10,20,30,40,50]),
+      ...pattern(18,[0,10,20,30,40,50]), ...pattern(19,[0,12,24,36,48]),
+      ...pattern(20,[0,12,24,36,48]), ...pattern(21,[0,15,30,45]),
+      ...pattern(22,[0,15,30,45]), ...pattern(23,[0,12,25,37,50]),
+    ],
+    saturday: [
+      { time: "00:00", marker: "*" }, { time: "00:05", marker: "^" }, { time: "00:20", marker: null },
+      ...pattern(6,[15,35,55]), ...pattern(7,[5,15,30,45]),
+      ...pattern(8,[0,15,30,45]), ...pattern(9,[0,15,30,45]), ...pattern(10,[0,15,30,45]),
+      ...pattern(11,[0,15,30,45]), ...pattern(12,[0,15,30,45]), ...pattern(13,[0,15,30,45]),
+      ...pattern(14,[0,15,30,45]), ...pattern(15,[0,15,30,45]), ...pattern(16,[0,15,30,45]),
+      ...pattern(17,[0,12,24,36,48]), ...pattern(18,[0,12,24,36,48]),
+      ...pattern(19,[0,15,30,45]), ...pattern(20,[0,15,30,45]),
+      ...pattern(21,[0,15,30,45]), ...pattern(22,[0,15,30,45]), ...pattern(23,[0,15,30,45]),
+    ],
+    sunPh: [
+      { time: "00:00", marker: "*" }, { time: "00:05", marker: "^" }, { time: "00:20", marker: null },
+      ...pattern(6,[15,35,55]), ...pattern(7,[5,15,30,45]),
+      ...pattern(8,[0,15,30,45]), ...pattern(9,[0,15,30,45]), ...pattern(10,[0,15,30,45]),
+      ...pattern(11,[0,15,30,45]), ...pattern(12,[0,15,30,45]), ...pattern(13,[0,15,30,45]),
+      ...pattern(14,[0,15,30,45]), ...pattern(15,[0,15,30,45]), ...pattern(16,[0,15,30,45]),
+      ...pattern(17,[0,12,24,36,48]), ...pattern(18,[0,12,24,36,48]),
+      ...pattern(19,[0,15,30,45]), ...pattern(20,[0,15,30,45]),
+      ...pattern(21,[0,15,30,45]), ...pattern(22,[0,15,30,45]), ...pattern(23,[0,15,30,45]),
+    ],
+  },
+
+  "03R-toDB": {
+    label: "SB → DB", sub: "DB03R · Sunny Bay Stn → DB Plaza",
+    weekday: [
+      { time: "00:00", marker: "^" }, { time: "00:12", marker: "*" }, { time: "00:15", marker: "^" },
+      { time: "00:32", marker: null }, { time: "00:52", marker: null }, { time: "01:12", marker: null },
+      ...pattern(6,[40,55]), ...pattern(7,[8,20,30,40,50]),
+      ...pattern(8,[5,15,25,35,40,50]), ...pattern(9,[0,10,20,30,40,55]),
+      ...pattern(10,[10,25,40,55]), ...pattern(11,[10,30,50]), ...pattern(12,[10,30,50]),
+      ...pattern(13,[10,30,50]), ...pattern(14,[10,30,50]), ...pattern(15,[10,30,50]),
+      ...pattern(16,[10,30,50]), ...pattern(17,[10,30,40,50]),
+      ...pattern(18,[0,10,20,30,40,50]), ...pattern(19,[0,10,20,30,42,54]),
+      ...pattern(20,[6,18,30,42,54]), ...pattern(21,[6,18,30,45]),
+      ...pattern(22,[0,15,30,45]), ...pattern(23,[0,15,30,45]),
+    ],
+    saturday: [
+      { time: "00:00", marker: "^" }, { time: "00:12", marker: "*" }, { time: "00:15", marker: "^" },
+      { time: "00:32", marker: null }, { time: "00:52", marker: null }, { time: "01:12", marker: null },
+      ...pattern(6,[40]), ...pattern(7,[0,20,35,50]),
+      ...pattern(8,[0,15,30,45]), ...pattern(9,[0,15,30,45]), ...pattern(10,[0,15,30,45]),
+      ...pattern(11,[0,15,30,45]), ...pattern(12,[0,15,30,45]), ...pattern(13,[0,15,30,45]),
+      ...pattern(14,[0,15,30,45]), ...pattern(15,[0,15,30,45]), ...pattern(16,[0,15,30,45]),
+      ...pattern(17,[0,15,30,42,54]), ...pattern(18,[6,18,30,42,54]),
+      ...pattern(19,[6,18,30,45]), ...pattern(20,[0,15,30,45]),
+      ...pattern(21,[0,15,30,45]), ...pattern(22,[0,15,30,45]), ...pattern(23,[0,15,32,52]),
+    ],
+    sunPh: [
+      { time: "00:00", marker: "^" }, { time: "00:12", marker: "*" }, { time: "00:15", marker: "^" },
+      { time: "00:32", marker: null }, { time: "00:52", marker: null }, { time: "01:12", marker: null },
+      ...pattern(6,[40]), ...pattern(7,[0,20,35,50]),
+      ...pattern(8,[0,15,30,45]), ...pattern(9,[0,15,30,45]), ...pattern(10,[0,15,30,45]),
+      ...pattern(11,[0,15,30,45]), ...pattern(12,[0,15,30,45]), ...pattern(13,[0,15,30,45]),
+      ...pattern(14,[0,15,30,45]), ...pattern(15,[0,15,30,45]), ...pattern(16,[0,15,30,45]),
+      ...pattern(17,[0,15,30,42,54]), ...pattern(18,[6,18,30,42,54]),
+      ...pattern(19,[6,18,30,45]), ...pattern(20,[0,15,30,45]),
+      ...pattern(21,[0,15,30,45]), ...pattern(22,[0,15,30,45]), ...pattern(23,[0,15,32,52]),
+    ],
+  },
+
+  "C4-toDBN": {
+    label: "CL → DBN", sub: "C4 · Coastline Villa → DB North",
+    weekday: [
+      ...pattern(0,[8,28,48]), ...pattern(5,[22,40,52]), ...pattern(6,[6,21,36,51]),
+      ...pattern(7,[6,16,26,36,46,56]), ...pattern(8,[6,16,26,36,46,56]),
+      ...pattern(9,[6,18,31,48]), ...pattern(10,[1,18,31,48]), ...pattern(11,[1,18,31,48]),
+      ...pattern(12,[1,18,31,48]), ...pattern(13,[1,18,31,48]), ...pattern(14,[1,18,31,48]),
+      ...pattern(15,[1,18,31,48]), ...pattern(16,[1,18,31,48]), ...pattern(17,[1,18,31,41,51]),
+      ...pattern(18,[1,11,21,31,41,51]), ...pattern(19,[1,11,21,31,41,51]),
+      ...pattern(20,[8,21,38,51]), ...pattern(21,[8,21,38,51]),
+      ...pattern(22,[8,21,38,51]), ...pattern(23,[8,28,48]),
+    ],
+    saturday: [
+      ...pattern(0,[8,28,48]), ...pattern(5,[22,40,52]), ...pattern(6,[6,21,36,51]),
+      ...pattern(7,[6,21,36,51]), ...pattern(8,[6,21,36,51]), ...pattern(9,[6,21,36,51]),
+      ...pattern(10,[8,21,38,51]), ...pattern(11,[8,21,38,51]), ...pattern(12,[8,21,38,51]),
+      ...pattern(13,[8,21,38,51]), ...pattern(14,[8,21,38,51]), ...pattern(15,[8,21,38,51]),
+      ...pattern(16,[8,21,38,51]), ...pattern(17,[8,21,38,51]), ...pattern(18,[8,21,38,51]),
+      ...pattern(19,[8,21,38,51]), ...pattern(20,[8,21,38,51]), ...pattern(21,[8,21,38,51]),
+      ...pattern(22,[8,21,38,51]), ...pattern(23,[8,28,48]),
+    ],
+    sunPh: [
+      ...pattern(0,[8,28,48]), ...pattern(5,[22,40,52]), ...pattern(6,[11,31,51]),
+      ...pattern(7,[11,31,51]), ...pattern(8,[6,21,36,51]), ...pattern(9,[8,21,38,51]),
+      ...pattern(10,[8,21,38,51]), ...pattern(11,[8,21,38,51]), ...pattern(12,[8,21,38,51]),
+      ...pattern(13,[8,21,38,51]), ...pattern(14,[8,21,38,51]), ...pattern(15,[8,21,38,51]),
+      ...pattern(16,[8,21,38,51]), ...pattern(17,[8,21,38,51]), ...pattern(18,[8,21,38,51]),
+      ...pattern(19,[8,21,38,51]), ...pattern(20,[8,21,38,51]), ...pattern(21,[8,21,38,51]),
+      ...pattern(22,[8,21,38,51]), ...pattern(23,[8,28,48]),
+    ],
+  },
+
+  "C4-toCL": {
+    label: "DBN → CL", sub: "C4 · DB North Plaza → Coastline Villa",
+    weekday: [
+      ...pattern(0,[3,23,43]), ...pattern(1,[3]), ...pattern(5,[40,55]),
+      ...pattern(6,[9,24,39,56]), ...pattern(7,[9,24,34,44,54]),
+      ...pattern(8,[4,14,26,36,46,56]), ...pattern(9,[6,16,26,36,51]),
+      ...pattern(10,[6,21,36,51]), ...pattern(11,[6,21,36,51]), ...pattern(12,[6,21,36,51]),
+      ...pattern(13,[6,21,36,51]), ...pattern(14,[6,21,36,51]), ...pattern(15,[6,21,36,51]),
+      ...pattern(16,[6,21,36,51]), ...pattern(17,[6,21,36,51]),
+      ...pattern(18,[1,11,21,31,41,51]), ...pattern(19,[1,11,21,31,41,51]),
+      ...pattern(20,[1,11,26,41,56]), ...pattern(21,[11,26,41,56]),
+      ...pattern(22,[11,26,41,56]), ...pattern(23,[11,23,43]),
+    ],
+    saturday: [
+      ...pattern(0,[3,23,43]), ...pattern(1,[3]), ...pattern(5,[40,55]),
+      ...pattern(6,[9,30,45,56]),  /* verify vs printed timetable */
+      ...pattern(7,[11,26,41,56]), ...pattern(8,[11,26,41,56]), ...pattern(9,[11,26,41,56]),
+      ...pattern(10,[11,26,41,56]), ...pattern(11,[11,26,41,56]), ...pattern(12,[11,26,41,56]),
+      ...pattern(13,[11,26,41,56]), ...pattern(14,[11,26,41,56]), ...pattern(15,[11,26,41,56]),
+      ...pattern(16,[11,26,41,56]), ...pattern(17,[11,26,41,56]), ...pattern(18,[11,26,41,56]),
+      ...pattern(19,[11,26,41,56]), ...pattern(20,[11,26,41,56]), ...pattern(21,[11,26,41,56]),
+      ...pattern(22,[11,26,41,56]), ...pattern(23,[11,23,43]),
+    ],
+    sunPh: [
+      ...pattern(0,[3,23,43]), ...pattern(1,[3]), ...pattern(5,[40,55]),
+      ...pattern(6,[9,35,55]), ...pattern(7,[15,35,55]),
+      ...pattern(8,[15,26,41,56]),  /* verify vs printed timetable */
+      ...pattern(9,[11,26,41,56]), ...pattern(10,[11,26,41,56]), ...pattern(11,[11,26,41,56]),
+      ...pattern(12,[11,26,41,56]), ...pattern(13,[11,26,41,56]), ...pattern(14,[11,26,41,56]),
+      ...pattern(15,[11,26,41,56]), ...pattern(16,[11,26,41,56]), ...pattern(17,[11,26,41,56]),
+      ...pattern(18,[11,26,41,56]), ...pattern(19,[11,26,41,56]), ...pattern(20,[11,26,41,56]),
+      ...pattern(21,[11,26,41,56]), ...pattern(22,[11,26,41,56]), ...pattern(23,[11,23,43]),
+    ],
+  },
+};
+
+const DEFAULT_ORDER = ["C4-toDBN", "03R-toSB", "C4-toCL", "03R-toDB"];
+
+// ---------- public holidays ----------
+// Bundled offline fallback: gazetted HK general holidays (gov.hk), 2026 + 2027.
+const HOLIDAYS_BUNDLED = [
+  // 2026
+  "20260101","20260217","20260218","20260219","20260403","20260404",
+  "20260406","20260407","20260501","20260525","20260619","20260701",
+  "20260926","20261001","20261019","20261225","20261226",
+  // 2027
+  "20270101","20270206","20270208","20270209","20270326","20270327",
+  "20270329","20270405","20270501","20270513","20270609","20270701",
+  "20270916","20271001","20271008","20271225","20271227",
+];
+const PH_URL = "https://www.1823.gov.hk/common/ical/en.json";
+const PH_KEY = "expressdb.ph";
+const PH_TTL = 7 * 24 * 60 * 60 * 1000;
+
+let holidaySet = new Set(HOLIDAYS_BUNDLED);
+let phSource = "bundled list";
+
+function loadHolidayCache() {
+  try {
+    const cache = JSON.parse(localStorage.getItem(PH_KEY));
+    if (cache && Array.isArray(cache.dates) && cache.dates.length) {
+      cache.dates.forEach(d => holidaySet.add(d));
+      phSource = "1823 live feed (cached " + new Date(cache.fetchedAt).toLocaleDateString() + ")";
+      return cache;
+    }
+  } catch (e) { /* ignore corrupt cache */ }
+  return null;
+}
+
+async function refreshHolidays() {
+  const cache = loadHolidayCache();
+  const age = cache ? Date.now() - (cache.fetchedAt || 0) : Infinity;
+  if (age <= PH_TTL) { updatePhStatus(); return; }
+  try {
+    const res = await fetch(PH_URL, { mode: "cors" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const dates = data.vcalendar[0].vevent.map(e => e.dtstart[0]);
+    dates.forEach(d => holidaySet.add(d));
+    localStorage.setItem(PH_KEY, JSON.stringify({ fetchedAt: Date.now(), dates }));
+    phSource = "1823 live feed (updated today)";
+  } catch (e) {
+    // CORS or offline — bundled/cached data keeps working.
+  }
+  updatePhStatus();
+  render(true);
+}
+
+// ---------- day-type + marker logic (identical to widget) ----------
+function ymd(d) {
+  return d.getFullYear() +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    String(d.getDate()).padStart(2, "0");
+}
+function sheetFor(d) {
+  if (holidaySet.has(ymd(d))) return "sunPh";
+  const dow = d.getDay();
+  if (dow === 0) return "sunPh";
+  if (dow === 6) return "saturday";
+  return "weekday";
+}
+function markerApplies(marker, d) {
+  if (!marker) return true;
+  const dow = d.getDay();
+  const yest = new Date(d); yest.setDate(yest.getDate() - 1);
+  const yestPH = holidaySet.has(ymd(yest));
+  if (marker === "*") return dow === 0 || dow === 1 || yestPH;
+  if (marker === "^") return !yestPH && dow >= 2 && dow <= 6;
+  return false;
+}
+function toMin(t) { const [h, m] = t.split(":").map(Number); return h * 60 + m; }
+function fmt(min) {
+  return String(Math.floor(min / 60)).padStart(2, "0") + ":" + String(min % 60).padStart(2, "0");
+}
+
+// All applicable departures (in minutes) for a route on a given date.
+function dayDepartures(routeId, d) {
+  const data = TIMETABLES[routeId][sheetFor(d)];
+  return data.filter(e => markerApplies(e.marker, d)).map(e => toMin(e.time));
+}
+
+// Next departures from `now` — falls through to tomorrow's first bus.
+function nextInfo(routeId, now) {
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const today = dayDepartures(routeId, now).filter(m => m >= nowMin);
+  if (today.length) return { when: "today", deps: today };
+  const tmr = new Date(now); tmr.setDate(tmr.getDate() + 1);
+  const first = dayDepartures(routeId, tmr);
+  return { when: "tomorrow", deps: first.slice(0, 1) };
+}
+
+// ---------- route preferences ----------
+const PREF_KEY = "expressdb.routes";
+let prefs;
+function loadPrefs() {
+  try {
+    prefs = JSON.parse(localStorage.getItem(PREF_KEY)) || {};
+  } catch (e) { prefs = {}; }
+  DEFAULT_ORDER.forEach(id => {
+    if (!prefs[id]) prefs[id] = { visible: true, pinned: false };
+  });
+}
+function savePrefs() { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); }
+function orderedRoutes() {
+  const visible = DEFAULT_ORDER.filter(id => prefs[id].visible);
+  return [...visible.filter(id => prefs[id].pinned), ...visible.filter(id => !prefs[id].pinned)];
+}
+
+// ---------- rendering ----------
+const RED_MAX = 3, AMBER_MAX = 8;
+const cardsEl = document.getElementById("cards");
+const openCards = new Set();
+let lastStructure = "";
+
+function colorVar(mins) {
+  if (mins <= RED_MAX) return "var(--red)";
+  if (mins <= AMBER_MAX) return "var(--amber)";
+  return "var(--green)";
+}
+
+function render(force) {
+  const now = new Date();
+  const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+
+  document.getElementById("clock").textContent =
+    [now.getHours(), now.getMinutes(), now.getSeconds()].map(n => String(n).padStart(2, "0")).join(":");
+  const sheet = sheetFor(now);
+  document.getElementById("daychip").textContent =
+    now.toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase() + " · " +
+    (sheet === "sunPh" ? (holidaySet.has(ymd(now)) && now.getDay() !== 0 ? "HOLIDAY" : "SUN/PH")
+     : sheet === "saturday" ? "SATURDAY" : "WEEKDAY");
+
+  const routes = orderedRoutes();
+  const structure = routes.join(",");
+  if (structure !== lastStructure || force) {
+    cardsEl.innerHTML = "";
+    routes.forEach(id => {
+      const c = document.createElement("article");
+      c.className = "card"; c.dataset.route = id; c.tabIndex = 0;
+      c.setAttribute("role", "button");
+      c.addEventListener("click", () => { toggleOpen(id); });
+      c.addEventListener("keydown", e => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleOpen(id); }
+      });
+      cardsEl.appendChild(c);
+    });
+    lastStructure = structure;
+  }
+
+  routes.forEach(id => {
+    const card = cardsEl.querySelector(`[data-route="${CSS.escape(id)}"]`);
+    const route = TIMETABLES[id];
+    const info = nextInfo(id, now);
+    const pinBadge = prefs[id].pinned ? '<span class="pin">★</span>' : "";
+    let inner = `
+      <div class="card-top">
+        <div><span class="route-name">${route.label}</span>${pinBadge}</div>
+        <span class="route-sub">${route.sub}</span>
+      </div>`;
+
+    card.classList.toggle("open", openCards.has(id));
+    card.classList.remove("urgent");
+
+    if (info.when === "today") {
+      const next = info.deps[0];
+      const minsAway = next - Math.floor(nowSec / 60);
+      const secsLeft = Math.max(0, next * 60 - nowSec);
+      const cd = secsLeft === 0 ? "due now"
+        : "in " + Math.floor(secsLeft / 60) + ":" + String(secsLeft % 60).padStart(2, "0");
+      const c = colorVar(minsAway);
+      card.style.setProperty("--edge", c);
+      card.style.setProperty("--edge-text", c);
+      if (minsAway <= RED_MAX) card.classList.add("urgent");
+      const then = info.deps.slice(1, 4).map(fmt).join("  ");
+      inner += `
+        <div class="board">
+          <span class="dep-time" style="color:${minsAway <= AMBER_MAX ? c : "var(--ink)"}">${fmt(next)}</span>
+          <span class="countdown ${minsAway <= AMBER_MAX ? "hot" : ""}">${cd}</span>
+        </div>
+        ${then ? `<div class="then"><b>then</b>  ${then}</div>` : `<div class="then">last bus today</div>`}`;
+      if (openCards.has(id)) {
+        const rest = info.deps.slice(1).map(fmt);
+        inner += `<div class="rest"><div class="rest-title">Rest of today</div>
+          <div class="rest-times">${rest.length ? rest.map(t => `<span>${t}</span>`).join("") : "<span>—</span>"}</div></div>`;
+      }
+    } else {
+      card.style.setProperty("--edge", "var(--faint)");
+      inner += `<div class="done-note">Done for today
+        <span class="tomorrow"> · first bus tomorrow ${info.deps.length ? fmt(info.deps[0]) : "—"}</span></div>`;
+    }
+    card.innerHTML = inner;
+  });
+}
+
+function toggleOpen(id) {
+  if (openCards.has(id)) openCards.delete(id); else openCards.add(id);
+  render(true);
+}
+
+// ---------- settings ----------
+const dlg = document.getElementById("settingsDlg");
+document.getElementById("settingsBtn").addEventListener("click", () => {
+  buildSettings(); dlg.showModal();
+});
+document.getElementById("closeSettings").addEventListener("click", () => dlg.close());
+dlg.addEventListener("close", () => render(true));
+
+function buildSettings() {
+  const wrap = document.getElementById("settingRows");
+  wrap.innerHTML = "";
+  DEFAULT_ORDER.forEach(id => {
+    const r = TIMETABLES[id];
+    const row = document.createElement("div");
+    row.className = "setting-row";
+    row.innerHTML = `<span>${r.label}</span>
+      <span class="controls">
+        <button data-act="pin" class="${prefs[id].pinned ? "active" : ""}">★ Pin</button>
+        <button data-act="vis" class="${prefs[id].visible ? "active" : ""}">${prefs[id].visible ? "Shown" : "Hidden"}</button>
+      </span>`;
+    row.querySelector('[data-act="pin"]').addEventListener("click", () => {
+      prefs[id].pinned = !prefs[id].pinned; savePrefs(); buildSettings();
+    });
+    row.querySelector('[data-act="vis"]').addEventListener("click", () => {
+      prefs[id].visible = !prefs[id].visible; savePrefs(); buildSettings();
+    });
+    wrap.appendChild(row);
+  });
+  updatePhStatus();
+}
+function updatePhStatus() {
+  const el = document.getElementById("phStatus");
+  if (el) el.textContent = "Public holidays: " + phSource +
+    ". Bundled gazetted dates cover 2026–2027 even fully offline.";
+}
+
+// ---------- boot ----------
+loadPrefs();
+loadHolidayCache();
+render(true);
+setInterval(() => render(false), 1000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) render(true);
+});
+refreshHolidays();
+</script>
+</body>
+</html>
